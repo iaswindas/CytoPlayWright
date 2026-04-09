@@ -2,7 +2,9 @@ import type { FileCategory, MigrationIssue } from "../shared/types";
 
 export interface ImportBinding {
   moduleSpecifier: string;
+  sideEffectOnly?: boolean;
   defaultImport?: string;
+  namespaceImport?: string;
   namedImports?: string[];
 }
 
@@ -32,6 +34,7 @@ export interface HookIR {
 export interface TestCaseIR {
   title: string;
   body: BlockIR;
+  modifier?: "skip" | "only";
 }
 
 export interface ScopedInstanceIR {
@@ -54,6 +57,7 @@ export interface SuiteIR {
   tests: TestCaseIR[];
   suites: SuiteIR[];
   issues: MigrationIssue[];
+  modifier?: "skip" | "only";
 }
 
 export interface SpecFileIR {

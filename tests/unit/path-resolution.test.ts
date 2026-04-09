@@ -3,7 +3,11 @@ import { buildPathResolution } from "../../src/shared/path-resolution";
 import type { ProjectDiscovery, DiscoveredFile } from "../../src/shared/types";
 import type { CypwConfig } from "../../src/config/types";
 
-function createMockFile(filePath: string, category: DiscoveredFile["category"]): DiscoveredFile {
+function createMockFile(
+  filePath: string,
+  category: DiscoveredFile["category"],
+  metadata: Partial<DiscoveredFile["metadata"]> = {}
+): DiscoveredFile {
   return {
     path: filePath,
     relativePath: filePath,
@@ -15,12 +19,16 @@ function createMockFile(filePath: string, category: DiscoveredFile["category"]):
       sourceLanguage: "ts",
       hasCypress: true,
       hasMocha: true,
+      specLike: category === "spec",
+      specEntry: category === "spec",
+      specRole: category === "spec" ? "entry" : undefined,
       hasPageObjectClass: false,
       hasIntercept: false,
       hasTask: false,
       hasFixture: false,
       hasRequest: false,
-      commandUsages: {}
+      commandUsages: {},
+      ...metadata
     }
   };
 }
@@ -56,6 +64,46 @@ describe("path-resolution", () => {
     expect(mapped).toBeDefined();
     expect(mapped).toContain("tests");
     expect(mapped).toContain("login.spec.ts");
+  });
+
+  it("normalizes promoted entry specs to .spec.ts output", () => {
+    const files = [
+      createMockFile("/project/cypress/e2e/flow/shared.ts", "spec", {
+        specLike: true,
+        specEntry: false,
+        specRole: "entry"
+      })
+    ];
+    const resolution = buildPathResolution({
+      projectRoot: "/project",
+      config: { outputRoot: "playwright" } as CypwConfig,
+      discovery: createMockDiscovery(files)
+    });
+
+    const mapped = resolution.sourceToOutput.get("/project/cypress/e2e/flow/shared.ts");
+    expect(mapped).toBeDefined();
+    expect(mapped).toContain("shared.spec.ts");
+  });
+
+  it("emits spec modules as non-collected .ts files", () => {
+    const files = [
+      createMockFile("/project/cypress/e2e/flow/shared.ts", "spec", {
+        specLike: true,
+        specEntry: false,
+        specRole: "module"
+      })
+    ];
+    const resolution = buildPathResolution({
+      projectRoot: "/project",
+      config: { outputRoot: "playwright" } as CypwConfig,
+      discovery: createMockDiscovery(files)
+    });
+
+    const mapped = resolution.sourceToOutput.get("/project/cypress/e2e/flow/shared.ts");
+    expect(mapped).toBeDefined();
+    expect(mapped).toContain("tests");
+    expect(mapped).toContain("shared.ts");
+    expect(mapped).not.toContain("shared.spec.ts");
   });
 
   it("maps page-objects to page-objects/ directory", () => {

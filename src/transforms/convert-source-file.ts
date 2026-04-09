@@ -22,9 +22,15 @@ export function convertSourceFile(runtime: CompilerRuntime, sourcePath: string):
     case "support":
       return transformSupportFile(runtime, sourcePath, analysis);
     case "helper":
+      if (sourceFile.getClasses().length > 0) {
+        return transformPageObject(runtime, sourceFile, analysis);
+      }
       return transformHelperFile(runtime, sourceFile, analysis);
     case "other":
       if (sourceFile.getFullText().includes("cy.")) {
+        if (sourceFile.getClasses().length > 0) {
+          return transformPageObject(runtime, sourceFile, analysis);
+        }
         return transformHelperFile(runtime, sourceFile, analysis);
       }
       return undefined;
@@ -44,6 +50,8 @@ export function findAnalysisRecord(runtime: CompilerRuntime, sourcePath: string)
     outputPath: analysis.generatedPath,
     category: analysis.category,
     sourceLanguage: analysis.sourceLanguage,
+    specLike: analysis.specLike,
+    specRole: analysis.specRole,
     status: analysis.status,
     confidence: analysis.confidence,
     issues: analysis.issues,

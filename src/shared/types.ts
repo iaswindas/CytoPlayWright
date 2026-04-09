@@ -7,6 +7,7 @@ export type FileCategory =
   | "utility"
   | "other";
 export type SourceLanguage = "ts" | "js";
+export type SpecRole = "entry" | "module";
 
 export type MigrationStatus =
   | "converted"
@@ -47,6 +48,9 @@ export interface DiscoveredFileMetadata {
   sourceLanguage: SourceLanguage;
   hasCypress: boolean;
   hasMocha: boolean;
+  specLike: boolean;
+  specEntry: boolean;
+  specRole?: SpecRole;
   hasPageObjectClass: boolean;
   hasIntercept: boolean;
   hasTask: boolean;
@@ -94,6 +98,8 @@ export interface FileAnalysis {
   sourcePath: string;
   category: FileCategory;
   sourceLanguage: SourceLanguage;
+  specLike: boolean;
+  specRole?: SpecRole;
   confidence: number;
   status: MigrationStatus;
   directMappings: string[];
@@ -142,6 +148,8 @@ export interface GeneratedFileRecord {
   outputPath: string;
   category: FileCategory;
   sourceLanguage: SourceLanguage;
+  specLike: boolean;
+  specRole?: SpecRole;
   status: MigrationStatus;
   confidence: number;
   issues: MigrationIssue[];
@@ -178,6 +186,7 @@ export interface ValidationDiagnostic {
   filePath: string;
   line: number;
   column: number;
+  code: string;
   message: string;
   category: "error" | "warning";
 }

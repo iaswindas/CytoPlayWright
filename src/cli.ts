@@ -1,17 +1,21 @@
 #!/usr/bin/env node
 import path from "node:path";
-import { loadConfig, writeDefaultConfig } from "./config/load-config";
+import { writeDefaultConfig } from "./config/load-config";
 import { createRuntime } from "./cli/create-runtime";
 import { generateProject } from "./generation/generate-project";
 import { readTextFile, writeTextFile } from "./shared/fs";
 import { CYPW_STATE_DIRECTORY } from "./shared/constants";
-import type { GeneratedFileRecord, ManifestData, ReportData, ValidationResult } from "./shared/types";
+import type { GeneratedFileRecord, ManifestData, MigrationIssue, ReportData, ValidationResult } from "./shared/types";
 import { writeAnalysisReport, writeConversionReports } from "./reporting/write-reports";
 import { validateOutput } from "./validation/validate-output";
 
 interface CliOptions {
   projectRoot: string;
   configPath?: string;
+}
+
+function normalizeFileKey(filePath: string): string {
+  return path.resolve(filePath).replace(/\\/g, "/");
 }
 
 function parseOptions(argv: string[]): { command?: string; options: CliOptions } {
@@ -55,11 +59,36 @@ Options:
 }
 
 function mergeValidation(records: GeneratedFileRecord[], validation: ValidationResult): GeneratedFileRecord[] {
-  const failingPaths = new Set(validation.diagnostics.filter((diagnostic) => diagnostic.category === "error").map((diagnostic) => diagnostic.filePath));
+  const diagnosticsByPath = new Map<string, typeof validation.diagnostics>();
+
+  for (const diagnostic of validation.diagnostics) {
+    const key = normalizeFileKey(diagnostic.filePath);
+    const current = diagnosticsByPath.get(key) ?? [];
+    current.push(diagnostic);
+    diagnosticsByPath.set(key, current);
+  }
 
   return records.map((record) => ({
     ...record,
-    status: failingPaths.has(record.outputPath) ? "failed" : record.status
+    status: (diagnosticsByPath.get(normalizeFileKey(record.outputPath)) ?? []).some((diagnostic) => diagnostic.category === "error")
+      ? "failed"
+      : record.status,
+    issues: [
+      ...record.issues.filter((issue) => issue.pattern !== "validation"),
+      ...(diagnosticsByPath.get(normalizeFileKey(record.outputPath)) ?? [])
+        .filter((diagnostic) => diagnostic.category === "error")
+        .map((diagnostic): MigrationIssue => ({
+          code: diagnostic.code,
+          message: `Validation failed: ${diagnostic.message}`,
+          severity: "error",
+          sourcePath: record.sourcePath,
+          location: {
+            line: diagnostic.line,
+            column: diagnostic.column
+          },
+          pattern: "validation"
+        }))
+    ]
   }));
 }
 
@@ -89,7 +118,7 @@ async function handleAnalyze(options: CliOptions): Promise<void> {
 async function handleConvert(options: CliOptions): Promise<void> {
   const runtime = await createRuntime(options.projectRoot, options.configPath);
   const generation = await generateProject(runtime);
-  const validation = await validateOutput(runtime.projectRoot, runtime.config.outputRoot);
+  const validation = await validateOutput(runtime, generation.records);
   const records = mergeValidation(generation.records, validation);
   await writeConversionReports(runtime, records, validation);
   console.log(`Generated ${generation.artifacts.length} artifacts under ${path.resolve(runtime.projectRoot, runtime.config.outputRoot)}`);
@@ -97,10 +126,9 @@ async function handleConvert(options: CliOptions): Promise<void> {
 }
 
 async function handleValidate(options: CliOptions): Promise<void> {
-  const loadedConfig = await loadConfig(options.projectRoot, options.configPath);
-  const manifest = await loadManifest(options.projectRoot);
-  const validation = await validateOutput(options.projectRoot, loadedConfig.config.outputRoot);
   const runtime = await createRuntime(options.projectRoot, options.configPath);
+  const manifest = await loadManifest(options.projectRoot);
+  const validation = await validateOutput(runtime, manifest.files);
   const updatedFiles = mergeValidation(manifest.files, validation);
   const updatedManifest: ManifestData = {
     ...manifest,

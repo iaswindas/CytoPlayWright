@@ -1,10 +1,15 @@
 import path from "node:path";
 import fg from "fast-glob";
-import { Project, SyntaxKind, type SourceFile } from "ts-morph";
+import { Node, Project, SyntaxKind, type Expression, type SourceFile } from "ts-morph";
 import type { CypwConfig } from "../config/types";
-import type { DiscoveredFile, FileCategory, ProjectDiscovery, SourceLanguage } from "../shared/types";
+import type { DiscoveredFile, FileCategory, ProjectDiscovery, SourceLanguage, SpecRole } from "../shared/types";
 
 const SOURCE_FILE_GLOB = "**/*.{ts,tsx,js,jsx,mjs,cjs}";
+const MOCHA_API_NAMES = new Set(["describe", "context", "it", "specify", "before", "beforeEach", "after", "afterEach"]);
+
+function normalizeFilePath(filePath: string): string {
+  return path.resolve(filePath).replace(/\\/g, "/");
+}
 
 function normalizeSpecGlobs(specGlobs: string[]): string[] {
   return specGlobs.map((pattern) => pattern.replace(/\\/g, "/"));
@@ -45,6 +50,29 @@ function categoryFromPath(filePath: string, specFiles: Set<string>, supportFileP
 
 function detectSourceLanguage(filePath: string): SourceLanguage {
   return /\.(ts|tsx)$/.test(filePath) ? "ts" : "js";
+}
+
+function getCallBaseName(expression: Expression): string | undefined {
+  if (Node.isIdentifier(expression)) {
+    return expression.getText();
+  }
+
+  if (Node.isPropertyAccessExpression(expression)) {
+    return getCallBaseName(expression.getExpression());
+  }
+
+  if (Node.isCallExpression(expression)) {
+    return getCallBaseName(expression.getExpression());
+  }
+
+  return undefined;
+}
+
+function detectMochaUsage(sourceFile: SourceFile): boolean {
+  return sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression).some((callExpression) => {
+    const baseName = getCallBaseName(callExpression.getExpression());
+    return Boolean(baseName && MOCHA_API_NAMES.has(baseName));
+  });
 }
 
 function countCypressCommands(sourceFile: SourceFile): Record<string, number> {
@@ -95,7 +123,8 @@ function getExports(sourceFile: SourceFile): string[] {
 function buildDiscoveredFile(
   sourceFile: SourceFile,
   projectRoot: string,
-  category: FileCategory
+  category: FileCategory,
+  specEntries: Set<string>
 ): DiscoveredFile {
   const relativePath = path.relative(projectRoot, sourceFile.getFilePath());
   const imports = sourceFile
@@ -103,6 +132,9 @@ function buildDiscoveredFile(
     .map((importDeclaration) => importDeclaration.getModuleSpecifierValue());
   const commandUsages = countCypressCommands(sourceFile);
   const sourceLanguage = detectSourceLanguage(sourceFile.getFilePath());
+  const normalizedPath = sourceFile.getFilePath().replace(/\\/g, "/");
+  const hasMocha = detectMochaUsage(sourceFile);
+  const specEntry = specEntries.has(normalizedPath);
 
   return {
     path: sourceFile.getFilePath(),
@@ -114,9 +146,10 @@ function buildDiscoveredFile(
     metadata: {
       sourceLanguage,
       hasCypress: sourceFile.getFullText().includes("cy."),
-      hasMocha: /(describe|context|it|specify|beforeEach|before|afterEach|after)\s*\(/.test(
-        sourceFile.getFullText()
-      ),
+      hasMocha,
+      specLike: hasMocha,
+      specEntry,
+      specRole: specEntry ? "entry" : undefined,
       hasPageObjectClass: sourceFile.getClasses().some((classDeclaration) =>
         /page/i.test(classDeclaration.getName() ?? "")
       ),
@@ -127,6 +160,89 @@ function buildDiscoveredFile(
       commandUsages
     }
   };
+}
+
+function assignSpecRoles(discoveredFiles: DiscoveredFile[], sourceFileMap: Map<string, SourceFile>): void {
+  const filesByPath = new Map(discoveredFiles.map((file) => [file.path, file]));
+  const normalizedSourcePaths = new Map([...sourceFileMap.keys()].map((filePath) => [normalizeFilePath(filePath), filePath]));
+  const specPipelinePaths = new Set(
+    discoveredFiles
+      .filter((file) => file.metadata.specEntry || file.metadata.specLike)
+      .map((file) => file.path)
+  );
+  const dependents = new Map<string, Set<string>>();
+
+  for (const file of discoveredFiles) {
+    const sourceFile = sourceFileMap.get(file.path);
+    if (!sourceFile) {
+      continue;
+    }
+
+    for (const importDeclaration of sourceFile.getImportDeclarations()) {
+      const dependencyPath = resolveImportedFilePath(sourceFile, importDeclaration.getModuleSpecifierValue(), normalizedSourcePaths)
+        ?? importDeclaration.getModuleSpecifierSourceFile()?.getFilePath();
+      if (!dependencyPath) {
+        continue;
+      }
+
+      if (!filesByPath.has(dependencyPath)) {
+        continue;
+      }
+
+      const existing = dependents.get(dependencyPath) ?? new Set<string>();
+      existing.add(file.path);
+      dependents.set(dependencyPath, existing);
+    }
+  }
+
+  for (const file of discoveredFiles) {
+    if (!file.metadata.specEntry && !file.metadata.specLike) {
+      continue;
+    }
+
+    const specDependents = [...(dependents.get(file.path) ?? new Set<string>())].filter((dependentPath) =>
+      specPipelinePaths.has(dependentPath)
+    );
+    const specRole: SpecRole = file.metadata.specEntry || specDependents.length === 0 ? "entry" : "module";
+    file.metadata.specRole = specRole;
+    file.category = "spec";
+  }
+}
+
+function resolveImportedFilePath(
+  sourceFile: SourceFile,
+  moduleSpecifier: string,
+  normalizedSourcePaths: Map<string, string>
+): string | undefined {
+  if (!moduleSpecifier.startsWith(".") && !moduleSpecifier.startsWith("/")) {
+    return undefined;
+  }
+
+  const candidatePaths = [
+    path.resolve(sourceFile.getDirectoryPath(), moduleSpecifier),
+    path.resolve(sourceFile.getDirectoryPath(), `${moduleSpecifier}.ts`),
+    path.resolve(sourceFile.getDirectoryPath(), `${moduleSpecifier}.tsx`),
+    path.resolve(sourceFile.getDirectoryPath(), `${moduleSpecifier}.js`),
+    path.resolve(sourceFile.getDirectoryPath(), `${moduleSpecifier}.jsx`),
+    path.resolve(sourceFile.getDirectoryPath(), `${moduleSpecifier}.mjs`),
+    path.resolve(sourceFile.getDirectoryPath(), `${moduleSpecifier}.cjs`),
+    path.resolve(sourceFile.getDirectoryPath(), moduleSpecifier, "index.ts"),
+    path.resolve(sourceFile.getDirectoryPath(), moduleSpecifier, "index.tsx"),
+    path.resolve(sourceFile.getDirectoryPath(), moduleSpecifier, "index.js"),
+    path.resolve(sourceFile.getDirectoryPath(), moduleSpecifier, "index.jsx"),
+    path.resolve(sourceFile.getDirectoryPath(), moduleSpecifier, "index.mjs"),
+    path.resolve(sourceFile.getDirectoryPath(), moduleSpecifier, "index.cjs")
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    const normalizedCandidatePath = normalizeFilePath(candidatePath);
+    const resolvedPath = normalizedSourcePaths.get(normalizedCandidatePath);
+    if (resolvedPath) {
+      return resolvedPath;
+    }
+  }
+
+  return undefined;
 }
 
 export interface DiscoveryRuntime {
@@ -170,8 +286,10 @@ export async function discoverProject(projectRoot: string, config: CypwConfig): 
   for (const sourceFile of project.getSourceFiles()) {
     sourceFileMap.set(sourceFile.getFilePath(), sourceFile);
     const category = categoryFromPath(sourceFile.getFilePath(), normalizedSpecFiles, supportFilePath);
-    discoveredFiles.push(buildDiscoveredFile(sourceFile, projectRoot, category));
+    discoveredFiles.push(buildDiscoveredFile(sourceFile, projectRoot, category, normalizedSpecFiles));
   }
+
+  assignSpecRoles(discoveredFiles, sourceFileMap);
 
   const categorized = {
     specFiles: discoveredFiles.filter((file) => file.category === "spec"),

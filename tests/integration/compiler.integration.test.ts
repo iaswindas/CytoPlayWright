@@ -159,4 +159,30 @@ describe("cypw CLI", () => {
     expect(report.files.every((entry: { outputPath: string }) => entry.outputPath.endsWith(".ts"))).toBe(true);
     expect(report.validation.passed).toBe(true);
   });
+
+  it("keeps shell specs valid when Cypress tests live in imported .ts modules", async () => {
+    const projectRoot = await createProjectFromFixture("spec-shell-suite");
+    await runCli(["convert", "--project-root", projectRoot]);
+
+    const entrySpecPath = path.resolve(projectRoot, "playwright", "tests", "flow", "entry.spec.ts");
+    const sharedModulePath = path.resolve(projectRoot, "playwright", "tests", "flow", "shared.ts");
+    const reportPath = path.resolve(projectRoot, ".cypw", "report.json");
+
+    const entrySpec = await readFile(entrySpecPath, "utf8");
+    const sharedModule = await readFile(sharedModulePath, "utf8");
+    const report = JSON.parse(await readFile(reportPath, "utf8"));
+    const sharedRecord = report.files.find((entry: { sourcePath: string }) => entry.sourcePath.endsWith("shared.ts"));
+
+    expect(sharedRecord).toBeDefined();
+    expect(sharedRecord.category).toBe("spec");
+    expect(sharedRecord.specLike).toBe(true);
+    expect(sharedRecord.specRole).toBe("module");
+    expect(entrySpec).toContain("import \"./shared\";");
+    expect(entrySpec).not.toContain("import  from");
+    expect(sharedModule).toContain("test.describe(\"shared flow\"");
+    expect(sharedModule).toContain("await page.getByTestId(\"shell-entry\").click();");
+    expect(sharedModule).not.toContain("cy.get");
+    expect(report.validation.passed).toBe(true);
+    expect(report.files.some((entry: { sourcePath: string; confidence: number; status: string }) => entry.sourcePath.endsWith("shared.ts") && entry.confidence <= 0.81 && entry.status === "converted_with_warnings")).toBe(true);
+  });
 });

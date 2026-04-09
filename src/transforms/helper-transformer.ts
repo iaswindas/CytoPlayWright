@@ -39,7 +39,12 @@ function rewriteImports(sourceFile: SourceFile, outputPath: string, runtime: Com
 
     imports.push({
       moduleSpecifier,
+      sideEffectOnly:
+        !importDeclaration.getDefaultImport() &&
+        !importDeclaration.getNamespaceImport() &&
+        importDeclaration.getNamedImports().length === 0,
       defaultImport: importDeclaration.getDefaultImport()?.getText(),
+      namespaceImport: importDeclaration.getNamespaceImport()?.getText(),
       namedImports: importDeclaration.getNamedImports().map((namedImport) => namedImport.getName())
     });
   }

@@ -24,13 +24,21 @@ function mergeImports(imports: ImportBinding[]): ImportBinding[] {
   for (const entry of imports) {
     const current = grouped.get(entry.moduleSpecifier) ?? {
       moduleSpecifier: entry.moduleSpecifier,
+      sideEffectOnly: entry.sideEffectOnly,
       defaultImport: entry.defaultImport,
+      namespaceImport: entry.namespaceImport,
       namedImports: []
     };
 
     if (!current.defaultImport && entry.defaultImport) {
       current.defaultImport = entry.defaultImport;
     }
+
+    if (!current.namespaceImport && entry.namespaceImport) {
+      current.namespaceImport = entry.namespaceImport;
+    }
+
+    current.sideEffectOnly = current.sideEffectOnly && !entry.defaultImport && !entry.namespaceImport && (entry.namedImports?.length ?? 0) === 0;
 
     const namedImports = new Set([...(current.namedImports ?? []), ...(entry.namedImports ?? [])]);
     current.namedImports = [...namedImports].sort();
@@ -52,13 +60,25 @@ function collectSuiteImports(suite: SuiteIR): ImportBinding[] {
 }
 
 function renderImport(importBinding: ImportBinding): string {
+  if (importBinding.sideEffectOnly) {
+    return `import ${JSON.stringify(importBinding.moduleSpecifier)};`;
+  }
+
   const parts: string[] = [];
   if (importBinding.defaultImport) {
     parts.push(importBinding.defaultImport);
   }
 
+  if (importBinding.namespaceImport) {
+    parts.push(`* as ${importBinding.namespaceImport}`);
+  }
+
   if ((importBinding.namedImports ?? []).length > 0) {
     parts.push(`{ ${(importBinding.namedImports ?? []).join(", ")} }`);
+  }
+
+  if (parts.length === 0) {
+    return `import ${JSON.stringify(importBinding.moduleSpecifier)};`;
   }
 
   return `import ${parts.join(", ")} from ${JSON.stringify(importBinding.moduleSpecifier)};`;
@@ -153,8 +173,9 @@ function renderSuite(suiteInput: SuiteIR, depth = 0): string {
   }
 
   for (const testCase of suite.tests) {
+    const testMethod = testCase.modifier ? `test.${testCase.modifier}` : `test`;
     bodyLines.push(
-      `test(${JSON.stringify(testCase.title)}, async ({ page, request, loadFixture, runTask, migrationState }) => {`,
+      `${testMethod}(${JSON.stringify(testCase.title)}, async ({ page, request, loadFixture, runTask, migrationState }) => {`,
       renderStatements(testCase.body.statements, 2),
       `});`
     );
@@ -165,7 +186,8 @@ function renderSuite(suiteInput: SuiteIR, depth = 0): string {
   }
 
   const body = bodyLines.length > 0 ? `\n${indentBlock(bodyLines.join("\n"), 2)}\n` : "\n";
-  return `${indent}test.describe(${JSON.stringify(suite.title)}, () => {${body}${indent}});`;
+  const describeMethod = suite.modifier ? `test.describe.${suite.modifier}` : `test.describe`;
+  return `${indent}${describeMethod}(${JSON.stringify(suite.title)}, () => {${body}${indent}});`;
 }
 
 function renderMethod(method: MethodIR): string {

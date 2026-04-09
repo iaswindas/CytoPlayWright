@@ -64,7 +64,12 @@ function rewriteImportBindings(sourceFile: SourceFile, outputPath: string, runti
 
     imports.push({
       moduleSpecifier,
+      sideEffectOnly:
+        !importDeclaration.getDefaultImport() &&
+        !importDeclaration.getNamespaceImport() &&
+        importDeclaration.getNamedImports().length === 0,
       defaultImport: importDeclaration.getDefaultImport()?.getText(),
+      namespaceImport: importDeclaration.getNamespaceImport()?.getText(),
       namedImports: importDeclaration.getNamedImports().map((namedImport) => namedImport.getName())
     });
   }
@@ -89,6 +94,25 @@ function getCallExpression(statement: Statement): CallExpression | undefined {
   return Node.isCallExpression(expression) ? expression : undefined;
 }
 
+function getCallBaseName(expression: Node): string {
+  if (Node.isIdentifier(expression)) return expression.getText();
+  if (Node.isPropertyAccessExpression(expression)) return getCallBaseName(expression.getExpression());
+  if (Node.isCallExpression(expression)) return getCallBaseName(expression.getExpression());
+  return expression.getText();
+}
+
+function getCallModifier(expression: Node): "skip" | "only" | undefined {
+  if (Node.isPropertyAccessExpression(expression)) {
+    const name = expression.getName();
+    if (name === "skip" || name === "only") return name;
+    return getCallModifier(expression.getExpression());
+  }
+  if (Node.isCallExpression(expression)) {
+    return getCallModifier(expression.getExpression());
+  }
+  return undefined;
+}
+
 function createTestCase(callExpression: CallExpression, context: TransformContext): TestCaseIR | undefined {
   const [titleArg, callbackArg] = callExpression.getArguments();
   if (!titleArg || !callbackArg || !Node.isArrowFunction(callbackArg) && !Node.isFunctionExpression(callbackArg)) {
@@ -100,7 +124,8 @@ function createTestCase(callExpression: CallExpression, context: TransformContex
   const statements = Node.isBlock(body) ? body.getStatements() : [];
   return {
     title,
-    body: transformBlock(statements, context)
+    body: transformBlock(statements, context),
+    modifier: getCallModifier(callExpression.getExpression())
   };
 }
 
@@ -301,7 +326,8 @@ function transformSuite(
     hooks: [],
     tests: [],
     suites: [],
-    issues: []
+    issues: [],
+    modifier: getCallModifier(callExpression.getExpression())
   };
 
   const hoistedAliases = computeHoistedAliases(body, context);
@@ -340,7 +366,7 @@ function transformSuite(
     const nestedCall = getCallExpression(statement);
     if (nestedCall) {
       const expression = nestedCall.getExpression();
-      const callName = expression.getText();
+      const callName = getCallBaseName(expression);
       if (callName === "describe" || callName === "context") {
         const nestedSuite = transformSuite(nestedCall, suiteContext, issues);
         if (nestedSuite) {
@@ -357,7 +383,8 @@ function transformSuite(
         continue;
       }
 
-      if (HOOK_NAME_MAP[callName]) {
+      const hookName = HOOK_NAME_MAP[callName];
+      if (hookName) {
         const hook = createHook(nestedCall, suiteContext);
         if (hook) {
           suite.hooks.push(hook);
@@ -416,8 +443,9 @@ export function transformSpecFile(runtime: CompilerRuntime, sourceFile: SourceFi
   for (const statement of sourceFile.getStatements()) {
     const callExpression = getCallExpression(statement);
     if (callExpression) {
-      const expression = callExpression.getExpression().getText();
-      if (expression === "describe" || expression === "context") {
+      const expression = callExpression.getExpression();
+      const baseName = getCallBaseName(expression);
+      if (baseName === "describe" || baseName === "context") {
         const suite = transformSuite(callExpression, context, issues);
         if (suite) {
           suites.push(suite);
@@ -425,7 +453,7 @@ export function transformSpecFile(runtime: CompilerRuntime, sourceFile: SourceFi
         continue;
       }
 
-      if (expression === "it" || expression === "specify") {
+      if (baseName === "it" || baseName === "specify") {
         const testCase = createTestCase(callExpression, context);
         if (testCase) {
           suites.push({

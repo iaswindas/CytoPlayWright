@@ -138,6 +138,8 @@ export async function generateProject(runtime: CompilerRuntime): Promise<Generat
       outputPath: ir.outputPath,
       category: fileAnalysis.category,
       sourceLanguage: fileAnalysis.sourceLanguage,
+      specLike: fileAnalysis.specLike,
+      specRole: fileAnalysis.specRole,
       status: statusFromIssues(fileAnalysis.status, unresolvedCount),
       confidence: fileAnalysis.confidence,
       issues: allIssues,

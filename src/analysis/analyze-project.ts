@@ -158,6 +158,21 @@ export function analyzeProject(runtime: CompilerRuntime): ProjectAnalysis {
     const sourceFile = runtime.sourceFileMap.get(file.path);
     const sourceText = sourceFile?.getFullText() ?? "";
 
+    if (file.metadata.specLike && !file.metadata.specEntry) {
+      issues.push(
+        createIssue(
+          file.path,
+          "spec-shell-module",
+          file.metadata.specRole === "module"
+            ? "Spec-like Cypress module was discovered outside specGlobs and will be emitted as a non-collected Playwright test module."
+            : "Spec-like Cypress file was discovered outside specGlobs and promoted into the spec pipeline.",
+          "spec-shell-gap",
+          "info"
+        )
+      );
+      confidence = Math.min(confidence, 0.81);
+    }
+
     if (file.metadata.sourceLanguage === "js") {
       issues.push(
         createIssue(
@@ -319,6 +334,8 @@ export function analyzeProject(runtime: CompilerRuntime): ProjectAnalysis {
           sourcePath: file.path,
           category: file.category,
           sourceLanguage: file.metadata.sourceLanguage,
+          specLike: file.metadata.specLike,
+          specRole: file.metadata.specRole,
           confidence,
           status: "manual_review",
           directMappings,
@@ -360,6 +377,8 @@ export function analyzeProject(runtime: CompilerRuntime): ProjectAnalysis {
       sourcePath: file.path,
       category: file.category,
       sourceLanguage: file.metadata.sourceLanguage,
+      specLike: file.metadata.specLike,
+      specRole: file.metadata.specRole,
       confidence,
       status,
       directMappings,
