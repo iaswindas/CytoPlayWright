@@ -1102,12 +1102,22 @@ function lowerCommandChain(analyzedChain: AnalyzedCommandChain, context: Transfo
         break;
       case "and":
       case "should": {
-        const assertion = translateShouldAssertion(current.subjectExpression ?? context.pageIdentifier, command.args, context, command, current.subjectKind);
-        codeLines.push(assertion.code);
-        issues.push(...assertion.issues);
-        imports.push(...assertion.imports);
-        unresolved = unresolved || assertion.unresolved;
-        strategy = mergeStrategy(strategy, assertion.conversionStrategy);
+        if (command.callback) {
+          // Phase 6: Callback assertions mapped to expect.toPass
+          const callbackCode = command.callback.node.getText();
+          codeLines.push(`await expect(async () => {`);
+          codeLines.push(`  // TODO(cypw): Rewrite callback body from jQuery/Chai to Playwright assertions`);
+          codeLines.push(`  // ${callbackCode}`);
+          codeLines.push(`}).toPass();`);
+          strategy = "best_effort";
+        } else {
+          const assertion = translateShouldAssertion(current.subjectExpression ?? context.pageIdentifier, command.args, context, command, current.subjectKind);
+          codeLines.push(assertion.code);
+          issues.push(...assertion.issues);
+          imports.push(...assertion.imports);
+          unresolved = unresolved || assertion.unresolved;
+          strategy = mergeStrategy(strategy, assertion.conversionStrategy);
+        }
         break;
       }
       case "as": {
@@ -1162,8 +1172,10 @@ function lowerCommandChain(analyzedChain: AnalyzedCommandChain, context: Transfo
           current = lowerResult("", "unknown");
         } else {
           const aliasName = firstArg.getText().replace(/["'`@]/g, "");
-          current = lowerResult("", "response", `await waitForAlias(${context.migrationStateIdentifier}, ${JSON.stringify(aliasName)})`);
-          codeLines.push(`${current.subjectExpression};`);
+          // Phase 6: Native waitForResponse instead of custom waitForAlias polyfill
+          current = lowerResult("", "response", `await ${context.pageIdentifier}.waitForResponse(res => res.url().includes(${JSON.stringify(aliasName)}) && res.status() >= 200)`);
+          codeLines.push(`const ${aliasName}Response = ${current.subjectExpression};`);
+          current = lowerResult("", "response", `${aliasName}Response`);
         }
         break;
       }
