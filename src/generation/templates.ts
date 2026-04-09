@@ -1,0 +1,272 @@
+export function createBaseTestTemplate(): string {
+  return `import { test as base, expect, type APIRequestContext, type APIResponse, type Locator, type Response } from "@playwright/test";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+export interface MigrationState {
+  responseAliases: Map<string, Promise<Response>>;
+  locatorAliases: Map<string, Locator>;
+  valueAliases: Map<string, unknown>;
+  routeAliases: Map<string, { url: string; fulfilled: boolean }>;
+}
+
+export type LoadFixture = (fixtureName: string) => Promise<any>;
+export type RunTask = (taskName: string, payload?: unknown) => Promise<unknown>;
+
+export const test = base.extend<{
+  migrationState: MigrationState;
+  loadFixture: LoadFixture;
+  runTask: RunTask;
+}>({
+  migrationState: async ({}, use) => {
+    await use({
+      responseAliases: new Map(),
+      locatorAliases: new Map(),
+      valueAliases: new Map(),
+      routeAliases: new Map()
+    });
+  },
+  loadFixture: async ({}, use) => {
+    await use(async (fixtureName) => {
+      const fixtureRoot = path.resolve(process.cwd(), "cypress/fixtures");
+      const raw = await fs.readFile(path.join(fixtureRoot, fixtureName), "utf8");
+      return JSON.parse(raw);
+    });
+  },
+  runTask: async ({}, use) => {
+    await use(async (taskName, payload) => {
+      throw new Error(\`TODO(cypw): configure task handler for "\${taskName}" with payload \${JSON.stringify(payload)}\`);
+    });
+  }
+});
+
+export { expect };
+
+// ─── Alias Management ────────────────────────────────────────────────────────
+
+export function registerAlias(state: MigrationState, aliasName: string, promise: Promise<Response>): void {
+  state.responseAliases.set(aliasName, promise);
+}
+
+export async function waitForAlias(state: MigrationState, aliasName: string): Promise<Response> {
+  const pending = state.responseAliases.get(aliasName);
+  if (!pending) {
+    throw new Error(\`TODO(cypw): alias "\${aliasName}" was never registered.\`);
+  }
+
+  return pending;
+}
+
+export function registerLocatorAlias(state: MigrationState, aliasName: string, locator: Locator): void {
+  state.locatorAliases.set(aliasName, locator);
+}
+
+export function getLocatorAlias(state: MigrationState, aliasName: string): Locator {
+  const locator = state.locatorAliases.get(aliasName);
+  if (!locator) {
+    throw new Error(\`TODO(cypw): locator alias "\${aliasName}" was never registered.\`);
+  }
+
+  return locator;
+}
+
+export function registerValueAlias(state: MigrationState, aliasName: string, value: unknown): void {
+  state.valueAliases.set(aliasName, value);
+}
+
+export async function getValueAlias<T = any>(state: MigrationState, aliasName: string): Promise<T> {
+  if (!state.valueAliases.has(aliasName)) {
+    throw new Error(\`TODO(cypw): value alias "\${aliasName}" was never registered.\`);
+  }
+
+  return state.valueAliases.get(aliasName) as T;
+}
+
+// ─── Response Normalization ──────────────────────────────────────────────────
+
+export interface NormalizedResponse {
+  status: number;
+  ok: boolean;
+  url: string;
+  body: any;
+  text?: string;
+  raw: APIResponse;
+}
+
+export async function normalizeResponse(response: APIResponse): Promise<NormalizedResponse> {
+  let body: any = undefined;
+  let text: string | undefined;
+
+  try {
+    body = await response.json();
+  } catch {
+    try {
+      text = await response.text();
+    } catch {
+      text = undefined;
+    }
+  }
+
+  return {
+    status: response.status(),
+    ok: response.ok(),
+    url: response.url(),
+    body,
+    text,
+    raw: response
+  };
+}
+
+// ─── File Utilities ──────────────────────────────────────────────────────────
+
+export async function loadProjectJson(relativePath: string): Promise<any> {
+  const raw = await fs.readFile(path.resolve(process.cwd(), relativePath), "utf8");
+  return JSON.parse(raw);
+}
+
+// ─── Route Mocking Utilities (Phase 2) ───────────────────────────────────────
+
+export interface MockRouteOptions {
+  status?: number;
+  body?: unknown;
+  headers?: Record<string, string>;
+  contentType?: string;
+}
+
+export async function mockRoute(
+  page: { route: (url: string | RegExp, handler: (route: any) => Promise<void>) => Promise<void> },
+  urlPattern: string | RegExp,
+  options: MockRouteOptions
+): Promise<void> {
+  await page.route(urlPattern, async (route: any) => {
+    await route.fulfill({
+      status: options.status ?? 200,
+      body: typeof options.body === "string" ? options.body : JSON.stringify(options.body),
+      contentType: options.contentType ?? "application/json",
+      headers: options.headers
+    });
+  });
+}
+
+export async function stubApiResponse(
+  page: { route: (url: string | RegExp, handler: (route: any) => Promise<void>) => Promise<void> },
+  urlPattern: string,
+  body: unknown,
+  status = 200
+): Promise<void> {
+  await mockRoute(page, \`**\${urlPattern}\`, { status, body });
+}
+`;
+}
+
+export function createPlaywrightConfigTemplate(): string {
+  return `import { defineConfig, devices } from "@playwright/test";
+
+/**
+ * Generated by cypw migration compiler.
+ * See https://playwright.dev/docs/test-configuration
+ */
+export default defineConfig({
+  testDir: "./tests",
+  timeout: 30_000,
+  expect: {
+    timeout: 5_000
+  },
+
+  /* Run tests in files in parallel */
+  fullyParallel: true,
+
+  /* Fail the build on CI if you accidentally left test.only in the source code */
+  forbidOnly: Boolean(process.env.CI),
+
+  /* Retry on CI only */
+  retries: process.env.CI ? 2 : 0,
+
+  /* Opt out of parallel tests on CI */
+  workers: process.env.CI ? 1 : undefined,
+
+  /* Reporter to use */
+  reporter: process.env.CI
+    ? [["list"], ["junit", { outputFile: "test-results/junit.xml" }], ["html", { outputFolder: "playwright-report", open: "never" }]]
+    : [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
+
+  /* Shared settings for all projects */
+  use: {
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "https://example.test",
+    trace: "on-first-retry",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
+
+    /* Collect trace data for test failures */
+    actionTimeout: 10_000,
+    navigationTimeout: 15_000
+  },
+
+  /* Configure projects for multiple browsers */
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] }
+    },
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"] }
+    },
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"] }
+    }
+  ]
+
+  /* Uncomment to start a local dev server before running tests */
+  // webServer: {
+  //   command: "npm run start",
+  //   url: "http://localhost:3000",
+  //   reuseExistingServer: !process.env.CI,
+  //   timeout: 120_000
+  // }
+});
+`;
+}
+
+export function createGeneratedTsconfigTemplate(): string {
+  return `{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "strict": false,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "types": ["node", "@playwright/test"]
+  },
+  "include": ["./**/*.ts", "./**/*.d.ts"]
+}
+`;
+}
+
+export function createGlobalSetupTemplate(): string {
+  return `/**
+ * Global setup for Playwright tests.
+ * Generated by cypw. Configure authentication state, database seeding, etc.
+ *
+ * Usage: add \`globalSetup: require.resolve("./global-setup")\` to playwright.config.ts
+ */
+
+import { chromium, type FullConfig } from "@playwright/test";
+
+export default async function globalSetup(config: FullConfig): Promise<void> {
+  // Example: Authenticate and save storage state
+  // const browser = await chromium.launch();
+  // const page = await browser.newPage();
+  // await page.goto(config.projects[0].use.baseURL + "/login");
+  // await page.fill("#username", process.env.TEST_USER ?? "admin");
+  // await page.fill("#password", process.env.TEST_PASSWORD ?? "password");
+  // await page.click("#submit");
+  // await page.context().storageState({ path: ".auth/admin.json" });
+  // await browser.close();
+}
+`;
+}

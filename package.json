@@ -1,0 +1,25 @@
+{
+  "name": "cypw",
+  "version": "0.1.0",
+  "description": "Enterprise-grade Cypress to Playwright migration compiler",
+  "license": "MIT",
+  "bin": {
+    "cypw": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.3",
+    "jsonc-parser": "^3.3.1",
+    "ts-morph": "^23.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.1",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "sourceRoots": ["cypress"],
+  "specGlobs": [
+    "cypress/e2e/**/*.spec.ts"
+  ],
+  "supportFile": "cypress/support/e2e.ts",
+  "tsconfigPath": "tsconfig.json",
+  "outputRoot": "playwright",
+  "customCommandMap": {},
+  "wrapperMap": {
+    "aliasHelpers": [],
+    "mappings": {}
+  },
+  "taskMap": {},
+  "interceptPolicies": {},
+  "pomRules": {
+    "preserve": ["**/page-objects/**/*.ts", "**/*.page.ts"],
+    "upgrade": ["**/page-objects/**/*.ts", "**/*.page.ts"],
+    "regenerate": []
+  },
+  "pluginModules": [
+    "./plugins/enterprise-plugin.cjs"
+  ],
+  "reporting": {
+    "unresolvedThreshold": 0.8,
+    "inlineTodoPrefix": "TODO(cypw)",
+    "strictControlFlow": false,
+    "maxBestEffortDepth": 2
+  }
+}
